@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Generic Gacha Galculator</title>
+        <style>
+            /* Switch style taken from https://www.w3schools.com/howto/howto_css_switch.asp because it looks nice*/
+            .switch {
+                position: relative;
+                display: inline-block;
+                width: 40px;
+                height: 20px;
+            }
+            .switch input {
+                opacity: 0;
+                width: 0;
+                height: 0;
+            }
+            .slider {
+                position: absolute;
+                cursor: pointer;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                border-radius: 20px;
+                background-color: #ccc;
+                -webkit-transition: 0.4s;
+                transition: 0.4s;
+            }
+            .slider:before {
+                position: absolute;
+                content: '';
+                height: 22px;
+                width: 22px;
+                left: -1px;
+                bottom: -1px;
+                border-radius: 50%;
+                background-color: white;
+                -webkit-transition: 0.4s;
+                transition: 0.4s;
+            }
+            input:checked + .slider {
+                background-color: #2196f3;
+            }
+            input:focus + .slider {
+                box-shadow: 0 0 1px #2196f3;
+            }
+            input:checked + .slider:before {
+                -webkit-transform: translateX(20px);
+                -ms-transform: translateX(20px);
+                transform: translateX(20px);
+            }
+
+            /* grid elements style*/
+            .grid-item {
+                display: flex;
+                border: 1px solid #eaebe7;
+                min-height: 2vh;
+                justify-content: center;
+                align-items: center;
+            }
+        </style>
+    </head>
+
+    <script>
+        let inputMode = 0
+        let layerCount = 1
+
+        function getProbabilities(NPulls, p, pityThreshold, options = { returnCache: false }) {
+            pityThreshold = pityThreshold || NPulls + 1
+            const q = 1 - p
+            const pPowers = new Array(NPulls + 1)
+            let mult = 1
+            for (let i = 0; i <= NPulls; ++i) {
+                pPowers[i] = mult
+                mult = mult * p
+            }
+            const qPowers = new Array(pityThreshold + 1)
+            mult = 1
+            for (let i = 0; i <= NPulls; ++i) {
+                qPowers[i] = mult
+                mult = mult * q
+            }
+
+            // Somehow this is faster than having the exact same code in the loop
+            // event loop type shit
+            function F(k, n) {
+                let s = 0
+                for (let i = 1; i <= n - k + 1 && i <= pityThreshold; ++i) {
+                    s += localFCache[n - i][k - 1] * qPowers[i - 1] * (i === pityThreshold ? 1 : p)
+                }
+                return s
+            }
+
+            const localFCache = []
+            for (let i = 0; i <= NPulls; ++i) {
+                localFCache[i] = new Array(NPulls + 1).fill(0)
+            }
+            // filling
+            for (let i = 0; i <= NPulls; ++i) {
+                for (let j = 0; j <= i; ++j) {
+                    if (j === i) {
+                        localFCache[i][j] = pPowers[i]
+                    } else if (j <= i / pityThreshold - 1) {
+                        // or continue
+                        localFCache[i][j] = 0
+                    } else if (j === 0) {
+                        localFCache[i][j] = qPowers[i]
+                    } else {
+                        localFCache[i][j] = F(j, i)
+                    }
+                }
+            }
+            if (options.returnCache) {
+                return localFCache
+            }
+
+            const probabilities = localFCache[NPulls]
+            return probabilities
+        }
+        function getLayeredProbabilities(NPulls, layers) {
+            let probOfNSuccesses = getProbabilities(NPulls, layers[0].p, layers[0].pityThreshold)
+            for (let i = 1; i < layers.length; ++i) {
+                const matrix = getProbabilities(NPulls, layers[i].p, layers[i].pityThreshold, { returnCache: true })
+                const summed = Array(NPulls + 1).fill(0)
+                for (let i = 0; i <= NPulls; ++i) {
+                    // start at i to avoid summing zeroes
+                    for (let j = i; j <= NPulls; ++j) {
+                        summed[i] += (matrix[j][i] ?? 0) * probOfNSuccesses[j]
+                    }
+                }
+                probOfNSuccesses = summed
+            }
+
+            return probOfNSuccesses
+        }
+        function esperance(P) {
+            return P.reduce((acc, p, i) => acc + i * p, 0)
+        }
+        function pThreshold(P, threshold) {
+            let runningSum = 0
+            for (let i = 0; i < threshold && i < P.length; ++i) {
+                runningSum += P[i]
+            }
+            return 1 - runningSum
+        }
+        function cumulativeDistribution(P) {
+            const sums = new Array(P.length).fill(1)
+            let runningSum = 0
+            for (let i = 0; i < P.length - 1; ++i) {
+                runningSum += P[i]
+                sums[i + 1] = 1 - runningSum
+            }
+            return sums
+        }
+
+        function padLeftWithSpaces(str, k = 8) {
+            return str.padStart(k, ' ').replace(' ', '&nbsp;')
+        }
+        function percent(n, k = 2) {
+            return (100 * n).toFixed(k) + '%'
+        }
+        function parseP(text) {
+            const f = parseFloat(text.replace(',', '.')) || 0
+            if (f > 1 || text.indexOf('%') > -1) {
+                return { p: f / 100, text: (f / 100).toString() }
+            }
+            return { p: f, text: f.toString() || '' }
+        }
+
+        function calc() {
+            const layerData = []
+            for (let i = 1; i <= layerCount; ++i) {
+                const { p, text } = parseP(document.getElementById(`baseProbability-${i}`).value)
+                document.getElementById(`baseProbability-${i}`).value = text
+                const pityThreshold = parseInt(document.getElementById(`pity-${i}`).value, 10) || 0
+                document.getElementById(`pity-${i}`).value = pityThreshold
+
+                layerData.push({ p, pityThreshold })
+            }
+
+            if (inputMode) {
+                const NPulls = parseInt(document.getElementById('NPulls').value, 10) || 0
+                document.getElementById('NPulls').value = NPulls
+
+                const distribution = layerData[0].p
+                    ? getLayeredProbabilities(NPulls, layerData)
+                    : new Array(NPulls).fill(0)
+                const esp = esperance(distribution)
+
+                let recapText = `
+                Average number of successes on the final layer : ${esp}<br>
+                Effective probability : ${percent(esp / NPulls)}<br>
+                <br>
+                <i>With X the number of successes</i>
+                `
+                const container = document.getElementById('distributionsContainer')
+                container.replaceChildren()
+                const cumulative = cumulativeDistribution(distribution)
+
+                const threshold = 0.0001 // 0.01%
+                let startAt = 0
+                let stopAt = 0
+                let k = 1
+                while (distribution[k] < threshold) {
+                    startAt = k + 1
+                    ++k
+                }
+                k = 0
+                while (distribution[NPulls - k] < threshold) {
+                    stopAt = NPulls - k
+                    ++k
+                }
+
+                for (let i = startAt; i < stopAt; i += 10) {
+                    const newGrid = document.createElement('div')
+                    newGrid.style.display = 'grid'
+                    newGrid.style.gridTemplateColumns = '1fr '.repeat(Math.min(11, stopAt - i + 1))
+
+                    const newNodeK = document.createElement('div')
+                    newNodeK.classList.add('grid-item')
+                    newNodeK.textContent = 'k'
+                    newGrid.appendChild(newNodeK)
+                    for (let j = i; j < i + 10 && j < stopAt; ++j) {
+                        const newNode = document.createElement('div')
+                        newNode.classList.add('grid-item')
+                        newNode.textContent = j.toString()
+                        newGrid.appendChild(newNode)
+                    }
+                    const newNodePK = document.createElement('div')
+                    newNodePK.classList.add('grid-item')
+                    newNodePK.textContent = 'P(X=k)'
+                    newGrid.appendChild(newNodePK)
+                    for (let j = i; j < i + 10 && j < stopAt; ++j) {
+                        const newNode = document.createElement('div')
+                        newNode.classList.add('grid-item')
+                        newNode.innerHTML = padLeftWithSpaces(percent(distribution[j]), 7)
+                        newGrid.appendChild(newNode)
+                    }
+                    const newNodePKPlus = document.createElement('div')
+                    newNodePKPlus.classList.add('grid-item')
+                    newNodePKPlus.textContent = 'P(X>=k)'
+                    newGrid.appendChild(newNodePKPlus)
+                    for (let j = i; j < i + 10 && j < stopAt; ++j) {
+                        const newNode = document.createElement('div')
+                        newNode.classList.add('grid-item')
+                        newNode.innerHTML = padLeftWithSpaces(percent(cumulative[j]), 7)
+                        newGrid.appendChild(newNode)
+                    }
+                    container.appendChild(newGrid)
+                    container.appendChild(document.createElement('br'))
+                }
+
+                document.getElementById('recap').innerHTML = recapText
+                draw(distribution)
+            } else {
+                const NSuccesses = parseInt(document.getElementById('NSuccesses').value, 10) || 0
+                document.getElementById('NSuccesses').value = NSuccesses
+                const { p: targetOdds, text: oddsText } = parseP(document.getElementById('targetOdds').value)
+                document.getElementById('targetOdds').value = oddsText
+
+                if (layerData.some((layer) => layer.pityThreshold === 0)) {
+                    alert('This calculation is not possible if a layer has no pity threshold')
+                    return
+                }
+
+                let distribution
+
+                const trueMax = NSuccesses * layerData.reduce((acc, layer) => acc * layer.pityThreshold, 1)
+
+                let nPullsLowerBound = 0
+                let nPullsUpperBound = trueMax
+                let oddsLower = 0
+                let oddsUpper = 1
+
+                while (nPullsUpperBound - nPullsLowerBound > 1) {
+                    const halfPoint = nPullsLowerBound + Math.round((nPullsUpperBound - nPullsLowerBound) / 2)
+                    const distribution = layerData[0].p
+                        ? getLayeredProbabilities(halfPoint, layerData)
+                        : new Array(halfPoint).fill(0)
+                    const p = pThreshold(distribution, NSuccesses)
+                    if (p >= targetOdds) {
+                        nPullsUpperBound = halfPoint
+                        oddsUpper = p
+                    } else {
+                        nPullsLowerBound = halfPoint
+                        oddsLower = p
+                    }
+                }
+
+                let recapText = `
+            ${nPullsLowerBound} pulls : ${percent(oddsLower, 2)}<br>
+            ${nPullsUpperBound} pulls : ${percent(oddsUpper, 2)}<br>
+            `
+                if (targetOdds === 1 && nPullsUpperBound < trueMax) {
+                    recapText += `<br>
+                True 100% odds are reached at ${trueMax} pulls,<br>
+                but the difference is simply too small to be stored after this point.<br>`
+                }
+                document.getElementById('recap').innerHTML = recapText
+            }
+        }
+        function draw(distribution, threshold = 10 ** -10, pColor = '#A0A0A0', pSumColor = '#A000A0') {
+            const white = 'rgba(255, 255, 255, 1)'
+            const black = 'rgba(0, 0, 0, 1)'
+
+            const canvas = document.getElementById('graph')
+            const ctx = canvas.getContext('2d')
+            const overheadX = 100
+            const overheadY = 100
+            const width = 2000
+            const height = 1000
+            ctx.canvas.width = width + overheadX
+            ctx.canvas.height = height + overheadY
+
+            ctx.fillStyle = white
+            ctx.fillRect(0, 0, width + overheadX, height + overheadY)
+
+            ctx.fillStyle = black
+            ctx.fillRect(overheadX - 1, 0, 1, height + overheadY)
+            ctx.fillRect(0, height, width + overheadX, 1)
+
+            let iMin = 0
+            while (distribution[iMin] < threshold && iMin < distribution.length) {
+                ++iMin
+            }
+            let iMax = distribution.length - 1
+            while (distribution[iMax] < threshold && iMax > 0) {
+                --iMax
+            }
+
+            let runningSum = distribution.reduce((acc, val, i) => (i < iMin ? acc + val : acc), 0)
+            const spaceX = width / (iMax - iMin)
+            const spaceY = height
+            for (let i = iMin; i < iMax; ++i) {
+                runningSum += distribution[i]
+                const x = overheadX + Math.round(spaceX * (i - iMin))
+                const y = Math.round((1 - distribution[i]) * spaceY)
+
+                ctx.fillStyle = pColor
+                ctx.fillRect(x - 5, y - 1, 11, 3)
+                ctx.fillRect(x - 1, y - 5, 3, 11)
+
+                const x2 = overheadX + Math.round(spaceX * (i - iMin))
+                const y2 = Math.round((1 - runningSum) * spaceY)
+
+                ctx.fillStyle = pSumColor
+                ctx.fillRect(x2 - 5, y2 - 1, 11, 3)
+                ctx.fillRect(x2 - 1, y2 - 5, 3, 11)
+
+                ctx.fillStyle = black
+                ctx.fillRect(x - 1, height, 3, overheadY / 6)
+
+                if (i === iMin || i % 5 === 0) {
+                    ctx.save()
+                    ctx.font = '30px Courier New'
+                    const textLength = ctx.measureText(i.toString()).width
+                    ctx.translate(x, height + 2 * (overheadY / 6) + textLength)
+                    ctx.rotate(-Math.PI / 2)
+                    ctx.font = '30px Courier New'
+                    ctx.fillText(i.toString(), 0, 0)
+                    ctx.restore()
+                }
+            }
+
+            for (let i = 0; i < 20; ++i) {
+                const x = overheadX
+                const y = Math.round(((20 - i) * spaceY) / 20)
+
+                ctx.fillStyle = black
+                ctx.fillRect(overheadX - overheadX / 6, y - 1, overheadX / 6, 3)
+
+                ctx.save()
+                const text = (i / 20).toFixed(2)
+                ctx.font = '30px Courier New'
+                const { width: textLength, actualBoundingBoxAscent: textHeight } = ctx.measureText(text)
+                ctx.translate(x - overheadX / 6 - textLength, y + textHeight / 2)
+                ctx.font = '30px Courier New'
+                ctx.fillText(text, 0, 0)
+                ctx.restore()
+            }
+        }
+        function toggleInputMode() {
+            inputMode = !inputMode
+            document.getElementById('inputModeSpan').textContent = inputMode ? 'number of pulls' : 'target odds'
+            if (inputMode) {
+                document.getElementById('nPullsInputContainer').style.display = ''
+                document.getElementById('targetOddsInputContainer').style.display = 'none'
+            } else {
+                document.getElementById('nPullsInputContainer').style.display = 'none'
+                document.getElementById('targetOddsInputContainer').style.display = ''
+            }
+            document.getElementById('recap').innerHTML = ''
+            document.getElementById('distributionsContainer').replaceChildren()
+
+            const canvas = document.getElementById('graph')
+            const ctx = canvas.getContext('2d')
+            ctx.canvas.width = 0
+            ctx.canvas.height = 0
+        }
+        function addLayer() {
+            ++layerCount
+            const grid = document.getElementById('parameterGrid')
+
+            const newPNode = document.createElement('div')
+            newPNode.classList.add('grid-item')
+            const newPInput = document.createElement('input')
+            newPInput.style.minWidth = '60px'
+            newPInput.value = '0.1'
+            newPInput.id = `baseProbability-${layerCount}`
+            const newPLabel = document.createElement('label')
+            newPLabel.textContent = `p${layerCount}=`
+            newPLabel.htmlFor = newPInput
+            newPNode.appendChild(newPLabel)
+            newPNode.appendChild(newPInput)
+
+            const newPityNode = document.createElement('div')
+            newPityNode.classList.add('grid-item')
+            const newPityInput = document.createElement('input')
+            newPityInput.style.minWidth = '40px'
+            newPityInput.value = '10'
+            newPityInput.id = `pity-${layerCount}`
+            const newPityLabel = document.createElement('label')
+            newPityLabel.textContent = `N${layerCount}=`
+            newPityLabel.htmlFor = newPityInput
+            newPityNode.appendChild(newPityLabel)
+            newPityNode.appendChild(newPityInput)
+
+            const removeNode = document.getElementById('divRemoveRow')
+
+            grid.insertBefore(newPNode, removeNode)
+            grid.insertBefore(newPityNode, removeNode)
+        }
+        function removeLayer() {
+            if (layerCount === 1) {
+                return
+            }
+            const grid = document.getElementById('parameterGrid')
+            const nodeP = document.getElementById(`baseProbability-${layerCount}`).parentNode
+            const nodePity = document.getElementById(`pity-${layerCount}`).parentNode
+            grid.removeChild(nodeP)
+            grid.removeChild(nodePity)
+            --layerCount
+        }
+    </script>
+    <body
+        style="
+            background-color: #1e1f1b;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 20px;
+            color: #eaebe7;
+        "
+    >
+        <div id="controlPanel">
+            <p>
+                Input mode :
+                <label class="switch">
+                    <input id="inputMode" type="checkbox" oninput="toggleInputMode()" />
+                    <span class="slider"></span>
+                </label>
+                <span id="inputModeSpan"></span>
+            </p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; max-width: 90vw" id="parameterGrid">
+                <div class="grid-item">
+                    <p>Base probability</p>
+                </div>
+                <div class="grid-item">
+                    <p>Pity threshold</p>
+                </div>
+                <div class="grid-item">
+                    <label for="baseProbability-1">p1=</label>
+                    <input type="text" id="baseProbability-1" style="min-width: 60px" value="0.1" />
+                </div>
+                <div class="grid-item">
+                    <label for="pity-1">N1=</label>
+                    <input type="text" id="pity-1" style="min-width: 40px" value="10" />
+                </div>
+                <!-- Add/remove rows -->
+                <div class="grid-item" id="divRemoveRow">
+                    <button onclick="removeLayer()">Remove last layer</button>
+                </div>
+                <div class="grid-item" id="divAddRow">
+                    <button onclick="addLayer()">Add a layer</button>
+                </div>
+            </div>
+            <br />
+            <br />
+            <div id="nPullsInputContainer">
+                <label for="NPulls">Number of Pulls</label>
+                <input type="text" id="NPulls" style="width: 40px" value="100" />
+            </div>
+            <div id="targetOddsInputContainer">
+                <label for="NSuccesses">Target number of successes</label>
+                <input type="text" id="NSuccesses" style="width: 40px" value="4" />
+                <br />
+                <label for="targetOdds">Desired odds of reaching</label>
+                <input type="text" id="targetOdds" style="width: 40px" value="0.80" />
+            </div>
+            <br />
+
+            <button onclick="calc()">Calculate</button>
+        </div>
+        <br />
+        <div id="Summary">
+            <span id="recap"></span>
+            <div id="distributionsContainer"></div>
+        </div>
+        <br />
+        <div id="graphDiv">
+            <canvas id="graph" style="min-width: 600px; max-width: 80vw; min-height: 600px; max-height: 80vh"></canvas>
+        </div>
+    </body>
+    <script>
+        toggleInputMode()
+    </script>
+</html>
