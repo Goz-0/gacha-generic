@@ -305,6 +305,7 @@
                 for (let i = startAt; i < stopAt; i += 10) {
                     const newGrid = document.createElement('div')
                     newGrid.style.display = 'grid'
+                    newGrid.style.maxWidth = `${(Math.min(11, stopAt - i + 1) * 94) / 11}vw`
                     newGrid.style.gridTemplateColumns = '1fr '.repeat(Math.min(11, stopAt - i + 1))
 
                     const newNodeK = document.createElement('div')
