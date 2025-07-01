@@ -80,7 +80,6 @@
         let layerCount = 1
 
         function getProbabilities(NPulls, p, pityThreshold, pityProgress, options = { returnCache: false }) {
-            //NPulls += pityProgress
             pityThreshold = pityThreshold || NPulls + 1
             const q = 1 - p
             const pPowers = new Array(NPulls + 1)
@@ -125,17 +124,16 @@
                     }
                 }
             }
-            const localFCacheWithProgress = []
-            for (let i = 0; i <= NPulls; ++i) {
-                localFCacheWithProgress[i] = new Array(NPulls + 1).fill(0)
-            }
+
+            // No pity progress -> we're done with calculations
             if (pityProgress === 0) {
-                for (let i = 0; i <= NPulls; ++i) {
-                    for (let j = 0; j <= i; ++j) {
-                        localFCacheWithProgress[i][j] = localFCache[i][j]
-                    }
+                if (options.returnCache) {
+                    return localFCache
                 }
+                const probabilities = localFCache[NPulls]
+                return probabilities
             } else {
+                // Else we need to modify the way we pick the first win
                 function F2(k, n) {
                     let s = 0
                     for (let i = 1; i <= n - k + 1 && i + pityProgress <= pityThreshold; ++i) {
@@ -143,31 +141,57 @@
                     }
                     return s
                 }
-                for (let i = 0; i <= NPulls; ++i) {
-                    for (let j = 0; j <= i; ++j) {
-                        if (j === i) {
-                            if (i === 0) {
-                                localFCacheWithProgress[i][j] = 1
+
+                // Only calculate the full matrix if we need to return it
+                if (options.returnCache) {
+                    const localFCacheWithProgress = []
+                    for (let i = 0; i <= NPulls; ++i) {
+                        localFCacheWithProgress[i] = new Array(NPulls + 1).fill(0)
+                    }
+                    for (let i = 0; i <= NPulls; ++i) {
+                        for (let j = 0; j <= i; ++j) {
+                            if (j === i) {
+                                if (i === 0) {
+                                    localFCacheWithProgress[i][j] = 1
+                                } else {
+                                    localFCacheWithProgress[i][j] = F2(j, i)
+                                }
+                            } else if (j <= (i + pityProgress) / pityThreshold - 1) {
+                                localFCacheWithProgress[i][j] = 0
+                            } else if (j === 0) {
+                                localFCacheWithProgress[i][j] = qPowers[i]
                             } else {
                                 localFCacheWithProgress[i][j] = F2(j, i)
                             }
-                        } else if (j <= (i + pityProgress) / pityThreshold - 1) {
-                            localFCacheWithProgress[i][j] = 0
-                        } else if (j === 0) {
-                            localFCacheWithProgress[i][j] = qPowers[i]
-                        } else {
-                            localFCacheWithProgress[i][j] = F2(j, i)
                         }
                     }
+                    return localFCacheWithProgress
+                } else {
+                    const localFCacheWithProgress = []
+                    for (let i = 0; i <= NPulls; ++i) {
+                        localFCacheWithProgress[i] = new Array(NPulls + 1).fill(0)
+                    }
+                    for (let i = NPulls; i <= NPulls; ++i) {
+                        for (let j = 0; j <= i; ++j) {
+                            if (j === i) {
+                                if (i === 0) {
+                                    localFCacheWithProgress[i][j] = 1
+                                } else {
+                                    localFCacheWithProgress[i][j] = F2(j, i)
+                                }
+                            } else if (j <= (i + pityProgress) / pityThreshold - 1) {
+                                localFCacheWithProgress[i][j] = 0
+                            } else if (j === 0) {
+                                localFCacheWithProgress[i][j] = qPowers[i]
+                            } else {
+                                localFCacheWithProgress[i][j] = F2(j, i)
+                            }
+                        }
+                    }
+                    const probabilities = localFCacheWithProgress[NPulls]
+                    return probabilities
                 }
             }
-            console.log(localFCacheWithProgress)
-            if (options.returnCache) {
-                return localFCacheWithProgress
-            }
-
-            const probabilities = localFCacheWithProgress[NPulls]
-            return probabilities
         }
         function getLayeredProbabilities(NPulls, layers) {
             let probOfNPulls = getProbabilities(NPulls, layers[0].p, layers[0].pityThreshold, layers[0].pityProgress)
@@ -245,6 +269,8 @@
                     ? getLayeredProbabilities(NPulls, layerData)
                     : new Array(NPulls).fill(0)
                 const esp = esperance(distribution)
+
+                console.log(distribution)
 
                 let recapText = `
                 Average number of successes on the final layer : ${esp}<br>
