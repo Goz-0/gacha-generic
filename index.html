@@ -59,6 +59,19 @@
                 justify-content: center;
                 align-items: center;
             }
+            a {
+                color: blue;
+                text-decoration: none;
+            }
+            a.external > span::after {
+                content: url('./images/external-link.svg');
+                display: inline-block;
+                vertical-align: middle;
+                height: 1em;
+                width: 1em;
+                text-decoration: underline;
+                alt: 'external link symbol';
+            }
         </style>
     </head>
 
@@ -66,7 +79,8 @@
         let inputMode = 0
         let layerCount = 1
 
-        function getProbabilities(NPulls, p, pityThreshold, options = { returnCache: false }) {
+        function getProbabilities(NPulls, p, pityThreshold, pityProgress, options = { returnCache: false }) {
+            //NPulls += pityProgress
             pityThreshold = pityThreshold || NPulls + 1
             const q = 1 - p
             const pPowers = new Array(NPulls + 1)
@@ -111,28 +125,67 @@
                     }
                 }
             }
+            const localFCacheWithProgress = []
+            for (let i = 0; i <= NPulls; ++i) {
+                localFCacheWithProgress[i] = new Array(NPulls + 1).fill(0)
+            }
+            if (pityProgress === 0) {
+                for (let i = 0; i <= NPulls; ++i) {
+                    for (let j = 0; j <= i; ++j) {
+                        localFCacheWithProgress[i][j] = localFCache[i][j]
+                    }
+                }
+            } else {
+                function F2(k, n) {
+                    let s = 0
+                    for (let i = 1; i <= n - k + 1 && i + pityProgress <= pityThreshold; ++i) {
+                        s += localFCache[n - i][k - 1] * qPowers[i - 1] * (i + pityProgress >= pityThreshold ? 1 : p)
+                    }
+                    return s
+                }
+                for (let i = 0; i <= NPulls; ++i) {
+                    for (let j = 0; j <= i; ++j) {
+                        if (j === i) {
+                            if (i === 0) {
+                                localFCacheWithProgress[i][j] = 1
+                            } else {
+                                localFCacheWithProgress[i][j] = F2(j, i)
+                            }
+                        } else if (j <= (i + pityProgress) / pityThreshold - 1) {
+                            localFCacheWithProgress[i][j] = 0
+                        } else if (j === 0) {
+                            localFCacheWithProgress[i][j] = qPowers[i]
+                        } else {
+                            localFCacheWithProgress[i][j] = F2(j, i)
+                        }
+                    }
+                }
+            }
+            console.log(localFCacheWithProgress)
             if (options.returnCache) {
-                return localFCache
+                return localFCacheWithProgress
             }
 
-            const probabilities = localFCache[NPulls]
+            const probabilities = localFCacheWithProgress[NPulls]
             return probabilities
         }
         function getLayeredProbabilities(NPulls, layers) {
-            let probOfNSuccesses = getProbabilities(NPulls, layers[0].p, layers[0].pityThreshold)
+            let probOfNPulls = getProbabilities(NPulls, layers[0].p, layers[0].pityThreshold, layers[0].pityProgress)
             for (let i = 1; i < layers.length; ++i) {
-                const matrix = getProbabilities(NPulls, layers[i].p, layers[i].pityThreshold, { returnCache: true })
+                const matrix = getProbabilities(NPulls, layers[i].p, layers[i].pityThreshold, layers[i].pityProgress, {
+                    returnCache: true,
+                })
                 const summed = Array(NPulls + 1).fill(0)
                 for (let i = 0; i <= NPulls; ++i) {
                     // start at i to avoid summing zeroes
-                    for (let j = i; j <= NPulls; ++j) {
-                        summed[i] += (matrix[j][i] ?? 0) * probOfNSuccesses[j]
+                    for (let n = i; n <= NPulls; ++n) {
+                        summed[i] += (matrix[n][i] ?? 0) * probOfNPulls[n]
                     }
                 }
-                probOfNSuccesses = summed
+                probOfNPulls = summed
             }
 
-            return probOfNSuccesses
+            return probOfNPulls
         }
         function esperance(P) {
             return P.reduce((acc, p, i) => acc + i * p, 0)
@@ -175,8 +228,13 @@
                 document.getElementById(`baseProbability-${i}`).value = text
                 const pityThreshold = parseInt(document.getElementById(`pity-${i}`).value, 10) || 0
                 document.getElementById(`pity-${i}`).value = pityThreshold
+                const pityProgress = Math.min(
+                    parseInt(document.getElementById(`pity-progress-${i}`).value, 10) || 0,
+                    pityThreshold - 1
+                )
+                document.getElementById(`pity-progress-${i}`).value = pityProgress
 
-                layerData.push({ p, pityThreshold })
+                layerData.push({ p, pityThreshold, pityProgress })
             }
 
             if (inputMode) {
@@ -382,7 +440,7 @@
         }
         function toggleInputMode() {
             inputMode = !inputMode
-            document.getElementById('inputModeSpan').textContent = inputMode ? 'number of pulls' : 'target odds'
+            document.getElementById('inputModeSpan').textContent = inputMode ? 'Number of pulls' : 'Target odds'
             if (inputMode) {
                 document.getElementById('nPullsInputContainer').style.display = ''
                 document.getElementById('targetOddsInputContainer').style.display = 'none'
@@ -400,6 +458,7 @@
         }
         function addLayer() {
             ++layerCount
+            const localLayerCount = layerCount
             const grid = document.getElementById('parameterGrid')
 
             const newPNode = document.createElement('div')
@@ -409,7 +468,7 @@
             newPInput.value = '0.1'
             newPInput.id = `baseProbability-${layerCount}`
             const newPLabel = document.createElement('label')
-            newPLabel.textContent = `p${layerCount}=`
+            newPLabel.innerHTML = `p<sub>${layerCount}</sub>=`
             newPLabel.htmlFor = newPInput
             newPNode.appendChild(newPLabel)
             newPNode.appendChild(newPInput)
@@ -421,15 +480,36 @@
             newPityInput.value = '10'
             newPityInput.id = `pity-${layerCount}`
             const newPityLabel = document.createElement('label')
-            newPityLabel.textContent = `N${layerCount}=`
+            newPityLabel.innerHTML = `N<sub>${layerCount}</sub>=`
             newPityLabel.htmlFor = newPityInput
             newPityNode.appendChild(newPityLabel)
             newPityNode.appendChild(newPityInput)
+
+            const newPityProgressNode = document.createElement('div')
+            newPityProgressNode.classList.add('grid-item')
+            const newPityProgressInput = document.createElement('input')
+            newPityProgressInput.style.minWidth = '10px'
+            newPityProgressInput.style.maxWidth = '3vw'
+            newPityProgressInput.value = '0'
+            newPityProgressInput.id = `pity-progress-${layerCount}`
+            const newPityProgressLabel1 = document.createElement('label')
+            newPityProgressLabel1.innerHTML = 'Progress&nbsp;'
+            newPityProgressLabel1.htmlFor = newPityProgressInput
+            newPityProgressNode.appendChild(newPityProgressLabel1)
+            newPityProgressNode.appendChild(newPityProgressInput)
+            const newPityProgressLabel2 = document.createElement('label')
+            newPityProgressLabel2.id = `pity-progress-limit-${layerCount}`
+            newPityProgressLabel2.textContent = '/9'
+            newPityProgressLabel2.htmlFor = newPityProgressInput
+            newPityProgressNode.appendChild(newPityProgressLabel2)
+
+            newPityInput.oninput = () => writeLimit(localLayerCount)
 
             const removeNode = document.getElementById('divRemoveRow')
 
             grid.insertBefore(newPNode, removeNode)
             grid.insertBefore(newPityNode, removeNode)
+            grid.insertBefore(newPityProgressNode, removeNode)
         }
         function removeLayer() {
             if (layerCount === 1) {
@@ -438,9 +518,16 @@
             const grid = document.getElementById('parameterGrid')
             const nodeP = document.getElementById(`baseProbability-${layerCount}`).parentNode
             const nodePity = document.getElementById(`pity-${layerCount}`).parentNode
+            const nodeProgress = document.getElementById(`pity-progress-${layerCount}`).parentNode
             grid.removeChild(nodeP)
             grid.removeChild(nodePity)
+            grid.removeChild(nodeProgress)
             --layerCount
+        }
+        function writeLimit(layerNumber) {
+            document.getElementById(`pity-progress-limit-${layerNumber}`).textContent = `/${
+                (parseInt(document.getElementById(`pity-${layerNumber}`).value) || 1) - 1
+            }`
         }
     </script>
     <body
@@ -451,16 +538,163 @@
             color: #eaebe7;
         "
     >
-        <div id="controlPanel">
+        <div id="intro">
+            <h1>What is a "<i>gacha</i>" or "<i>pity</i>" pull ?</h1>
             <p>
-                Input mode :
-                <label class="switch">
-                    <input id="inputMode" type="checkbox" oninput="toggleInputMode()" />
-                    <span class="slider"></span>
-                </label>
-                <span id="inputModeSpan"></span>
+                This system of random experiments ("<i>pulls</i>") is a system where the outcome of an experiment is
+                either random or forced.<br />
+                Specifically, the outcome is random until a streak of N-1 (N being called the "<i>pity threshold</i>")
+                losses is achieved, then the outcome of the next experiment is a guaranteed win.
             </p>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; max-width: 90vw" id="parameterGrid">
+            <p>
+                This mechanic is commong in "<i>Gacha games</i>", and is even done in multiple layers, where a player
+                can pull a random reward that can be :
+            </p>
+            <ul>
+                <li>a character, or not</li>
+                <li>of a certain rarity, or not</li>
+                <li>of a certain group, or not</li>
+                <li><i>et caetera</i> …</li>
+            </ul>
+            <p>
+                Each of those characteristic being a random experiment ran on top of the previous one (<i
+                    >if the previous one succeeds</i
+                >), with their own base probabilities of winning & pity thresholds.
+            </p>
+            <h1>What does this web page do ?</h1>
+            <p>
+                This page aims to offer a calculator to help clarify what are your actual odds with a certain number of
+                pulls, because your odds <strong>DO</strong> vary with the number of pulls.
+            </p>
+            <p>
+                In the case where the user inputs a number of <i>pulls</i>, the resulting distribution is calculated and
+                presented to the user in an array and a graph form.
+            </p>
+            <p>
+                One should note that the results are prone to numerical erros due to the way numbers are stored, and one
+                should also know that some values may not be presented if they are deemed too small (<i
+                    >for probabilites &lt; 0.0001, they are not shown in the array, for probabilities &lt; 10 ** -10,
+                    they are not drawn on the graph</i
+                >).
+            </p>
+            <p>
+                In fact, the greater the number of pulls N<sub>pulls</sub>, the greater
+                <math>
+                    <mfrac>
+                        <mrow>
+                            <mi>E</mi>
+                            <mo>(</mo>
+                            <mi>X</mi>
+                            <mo>)</mo>
+                        </mrow>
+                        <mi>N<sub>pulls</sub></mi>
+                    </mfrac> </math
+                >, the average proportion of pulls that end with a success (called "<i>effective probability</i>"
+                hereafter).
+            </p>
+            <p>
+                In fact, as
+                <math>
+                    <mi>N<sub>pulls</sub></mi>
+                    &rarr;
+                </math>
+                &infin;,
+                <math>
+                    <mfrac>
+                        <mrow>
+                            <mi>E</mi>
+                            <mo>(</mo>
+                            <mi>X</mi>
+                            <mo>)</mo>
+                        </mrow>
+                        <mi>N<sub>pulls</sub></mi>
+                    </mfrac>
+                </math>
+                converges towards
+                <math>
+                    <mfrac>
+                        <mi>p</mi>
+                        <mrow>
+                            <mn>1</mn>
+                            <mo>-</mo>
+                            <msup>
+                                <mrow>
+                                    <mo>(</mo>
+                                    <mn>1</mn>
+                                    <mo>-</mo>
+                                    <mi>p</mi>
+                                    <mo>)</mo>
+                                </mrow>
+                                <mi>N</mi>
+                            </msup>
+                        </mrow>
+                    </mfrac></math
+                >.
+            </p>
+            <p>
+                The reasoning that establishes this limit (independently of
+                <math
+                    ><mi>N<sub>pulls</sub></mi></math
+                >) can be found
+                <a
+                    href="https://math.stackexchange.com/questions/1850986/how-does-a-pity-timer-affects-probabilities"
+                    target="_blank"
+                    rel="noopener"
+                    class="external"
+                >
+                    <span>there</span></a
+                >.
+            </p>
+            <h1>How to use this page ?</h1>
+            <p>This pages uses the concept of "layers" to describe successive experiments.</p>
+            <p>An experiment in the layer k is only ran if the outcome of the experiment in layer k-1 is a success.</p>
+            <p>
+                Two input modes are available, one where the user enters a number of pulls and receives the distribution
+                of results, and one where the user enters a target number of successes on the final layer and a
+                probability and receives the number of pulls needed to make the outcome "<i
+                    >this number of successes of more</i
+                >" have a probability of at least what the user entered.
+            </p>
+            <p>
+                If a layer k does not have a pity threshold, enter the value 0 for N<sub>k</sub>; this is not compatible
+                with the "<i>Target Odds</i>" input mode, as it makes the resulting number of pulls unbounded.
+            </p>
+            <h3>Example</h3>
+            <p>To represent the following system :</p>
+            <ul>
+                <li>
+                    A pull can result in an rarity that is R, SR or SSR. SSR has a base probability of 0.05 and a pity
+                    threshold of 20
+                </li>
+                <li>
+                    An SSR pull can be either a piece of equipment, or a character. It is a character with a base
+                    probability of 0.1 and a pity threshold of 10
+                </li>
+                <li>
+                    An SSR character can either be the one I selected or not, with a base probability of 0.5 and a pity
+                    threshold of 3
+                </li>
+                <li>
+                    <strong
+                        >I can pull 500 times, what are the chances that I get the SSR character I want, and how many
+                        copies of it will I get on average ?</strong
+                    >
+                </li>
+            </ul>
+            <p>One would create 3 layers, with the following parameters</p>
+            <ul>
+                <li>p<sub>1</sub>=0.05 N<sub>1</sub>=20</li>
+                <li>p<sub>2</sub>=0.1 N<sub>2</sub>=10</li>
+                <li>p<sub>3</sub>=0.5 &nbsp;N<sub>3</sub>=3</li>
+            </ul>
+            <p>
+                Then selecting the input mode as "Number of pulls", one would enter the 500 pulls value and press the
+                "Calculate" button.
+            </p>
+            <br />
+        </div>
+        <div id="calculator">
+            <div style="display: grid; grid-template-columns: 2fr 2fr 1fr; max-width: 90vw" id="parameterGrid">
                 <div class="grid-item">
                     <p>Base probability</p>
                 </div>
@@ -468,12 +702,24 @@
                     <p>Pity threshold</p>
                 </div>
                 <div class="grid-item">
-                    <label for="baseProbability-1">p1=</label>
+                    <p style="text-align: center">
+                        Progress on Pity<br />
+                        <span style="font-size: small">(experimental)</span>
+                    </p>
+                </div>
+                <!-- End of headers -->
+                <div class="grid-item">
+                    <label for="baseProbability-1">p<sub>1</sub>=</label>
                     <input type="text" id="baseProbability-1" style="min-width: 60px" value="0.1" />
                 </div>
                 <div class="grid-item">
-                    <label for="pity-1">N1=</label>
-                    <input type="text" id="pity-1" style="min-width: 40px" value="10" />
+                    <label for="pity-1">N<sub>1</sub>=</label>
+                    <input type="text" id="pity-1" style="min-width: 40px" value="10" oninput="writeLimit(1)" />
+                </div>
+                <div class="grid-item">
+                    <label for="pity-progress-1">Progress&nbsp;</label>
+                    <input type="text" id="pity-progress-1" style="min-width: 20px; max-width: 3vw" value="0" />
+                    <label id="pity-progress-limit-1" for="pity-progress-1">/10</label>
                 </div>
                 <!-- Add/remove rows -->
                 <div class="grid-item" id="divRemoveRow">
@@ -484,6 +730,15 @@
                 </div>
             </div>
             <br />
+
+            <p>
+                Input mode :
+                <label class="switch">
+                    <input id="inputMode" type="checkbox" oninput="toggleInputMode()" />
+                    <span class="slider"></span>
+                </label>
+                <span id="inputModeSpan"></span>
+            </p>
             <br />
             <div id="nPullsInputContainer">
                 <label for="NPulls">Number of Pulls</label>
@@ -512,5 +767,6 @@
     </body>
     <script>
         toggleInputMode()
+        writeLimit(1)
     </script>
 </html>
