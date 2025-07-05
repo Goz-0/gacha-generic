@@ -260,7 +260,7 @@
                 document.getElementById(`pity-${i}`).value = pityThreshold
                 const pityProgress = Math.min(
                     parseInt(document.getElementById(`pity-progress-${i}`).value, 10) || 0,
-                    pityThreshold - 1
+                    (pityThreshold || 1) - 1
                 )
                 document.getElementById(`pity-progress-${i}`).value = pityProgress
 
